@@ -1,0 +1,333 @@
+---
+title: "Local Biplots for Antibiotic Data"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Local Biplots for Antibiotic Data}
+  %\VignetteEngine{knitr::rmarkdown}
+  \usepackage[utf8]{inputenc}
+---
+
+
+# Code for antibiotic data plots
+
+This file contains the code used for making the figures in https://arxiv.org/abs/2008.02662.
+The data and the interpretation of the figures are described in more detail in the paper.
+
+I'm including the code as a vignette in the `localBiplots` package, but the computations for the local biplot axes take long enough to run that I'm only including the code and not having it be evaluated by default.
+I've included some notes about which ones take a long time and how long they took on my laptop.
+
+```{r}
+library(knitr)
+opts_chunk$set(eval = FALSE)
+```
+
+We start with the packages we need and read in the data.
+
+```{r}
+library(localBiplots)
+library(Matrix)
+library(phyloseq)
+library(ape)
+library(gridExtra)
+library(adaptiveGPCA)
+library(treeDA)
+source("unifrac-distances-and-derivs.R")
+data("antibiotic")
+```
+
+Then color palette definition and some data cleaning/recoding of factor levels and a function that we will need later for plotting.
+
+```{r}
+# from http://tools.medialab.sciences-po.fr/iwanthue/
+otuPalette = c("#D44251","#77CD39","#6AAECD","#CB53D4","#CDB13E","#577B39","#CA96CC","#53B99F","#C6488F","#AA6E37","#7670CF","#63658B","#D95728","#78C872","#B4606B")
+species_point_size = .6
+sample_point_size = .8
+tab = table(tax_table(abt)[,"Taxon_5"])
+FamilySubset = tax_table(abt)[,"Taxon_5"]
+FamilySubset[FamilySubset %in% names(which(tab < 5))] = ""
+unknown = c("Incertae Sedis", "uncultured")
+FamilySubset[FamilySubset %in% unknown] = ""
+FamilySubset[FamilySubset == "Clostridiaceae_1"] = "Clostridiaceae"
+FamilySubset[FamilySubset == "Peptostreptococcaceae_1"] = "Peptostreptococcaceae"
+FamilySubset[FamilySubset == "Peptococcaceae_1"] = "Peptococcaceae"
+FamilySubset[FamilySubset == "BrenneriaBCCCDEEEEEHKKLLPPRRSYersinia"] = "Yersinia"
+FamilySubset[FamilySubset == ""] = "Unknown"
+FamilySubset = as.factor(FamilySubset)
+FamilySubset = relevel(FamilySubset, "Unknown")
+sd = as(sample_data(abt), "data.frame")
+sd$type = ifelse(sd$condition %in% c("Pre Cp", "Interim", "Post Cp"), "no abx", "abx")
+g_legend = function(a.gplot) {
+  tmp = ggplot_gtable(ggplot_build(a.gplot))
+  leg = which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
+  legend = tmp$grobs[[leg]]
+  return(legend)
+}
+
+```
+
+## Local biplot axes for UniFrac
+
+Here we do the setup to compute the local biplot axes for UniFrac.
+`A` and `L` are matrices related to the phylogenetic tree associated with this dataset.
+The code that I'm using does some pre-computations of values that are used multiple times later, this takes about 45 minutes on my laptop.
+```{r}
+X = t(as(otu_table(abt), "matrix"))
+A = t(treeDA:::makeDescendantMatrix(phy_tree(abt)))
+L = treeDA:::getBranchLengths(phy_tree(abt))
+uf_cache = uf_lb_computations(X, A, L)
+```
+
+Then we actually create the local biplot axes for UniFrac.
+This is the part that takes the longest, on my laptop it took about two hours.
+We define a function that makes the UniFrac distance, and then the local biplot axes are created by the `uf_lb` function.
+We don't make use of the `local_biplot` interface here because it's too slow: `uf_lb` is built specificalyl for UniFrac and does things a little more efficiently.
+```{r}
+uf_dist_ours = function(X) uf_dist(X, t(A), L)
+uf_mds_matrices = localBiplots:::make_mds_matrices(X, uf_dist_ours)
+samples_for_biplot = seq(1,nrow(X), by = 3)
+uf_sens_all = lapply(samples_for_biplot, function(i) {
+    uf_lb(X, sample_idx = i,
+          uf_cached = uf_cache,
+          mds_matrices = uf_mds_matrices, n_axes = 2)
+})
+```
+
+## Local biplot axes for weighted UniFrac
+
+Next we do the same thing for weighted UniFrac.
+We define a distance function and a derivative function for weighted UniFrac and the tree associated with this dataset.
+Once the distance and derivative functions are defined, we can use the `local_biplot` function to get the biplot data frame.
+The local biplot axis computations here take about 10 minutes.
+
+```{r}
+wuf_dist_ours = function(X) wuf_dist(X, t(A), L)
+wuf_deriv_ours = function(x, y) wuf_dist_deriv(x, y, t(A), L)
+biplot_df = local_biplot(X, wuf_dist_ours, wuf_deriv_ours)
+```
+
+## Plotting for weighted UniFrac
+
+Now that all the computations are done, we can make the plots.
+We start off by just making the plot of the samples for weighted UniFrac.
+The sample embeddings are one of the elements in the output from `make_mds_matrices`.
+
+```{r}
+wuf_mds_matrices = localBiplots:::make_mds_matrices(X, wuf_dist_ours)
+wuf_sample_plot =
+    ggplot(data.frame(subset(biplot_df, variable == "UncShi72"), sd)) +
+    geom_point(aes(x = x, y = y, color = type, shape = ind), size = sample_point_size) +
+    xlab(sprintf("Axis 1: %2.1f%%", wuf_mds_matrices$Lambda[1] / sum(wuf_mds_matrices$Lambda) * 100)) +
+    ylab(sprintf("Axis 2: %2.1f%%", wuf_mds_matrices$Lambda[2] / sum(wuf_mds_matrices$Lambda) * 100))
+pdf("wuf_sample_plot.pdf", width = 4, height = 2.5)
+wuf_sample_plot
+dev.off()
+```
+
+Then we define a function that makes a pair of plots corresponding to the local biplot axes for weighted UniFrac at one sample point.
+In the pair of plots, the left-hand plot shows the sample embeddings with the sample corresponding to the local biplot axes highlighted.
+The right-hand plot shows the local biplot axes for the highlighted sample.
+
+```{r}
+make_pair_at_sample_wuf = function(s_idx, plotList = FALSE) {
+    highlight.color = "#E58601" ## this is wes_palette("FantasticFox1", 5)[4]
+    wuf_xlab = xlab(sprintf("Axis 1: %2.1f%%", wuf_mds_matrices$Lambda[1] / sum(wuf_mds_matrices$Lambda) * 100))
+    wuf_ylab = ylab(sprintf("Axis 2: %2.1f%%", wuf_mds_matrices$Lambda[2] / sum(wuf_mds_matrices$Lambda) * 100))
+    sample_plot_highlighted =
+        ggplot(data.frame(subset(biplot_df, variable == "UncShi72"), sample_data(abt))) +
+        geom_point(aes(x = x, y = y, color = sample == s_idx, size = sample == s_idx)) +
+        scale_color_manual(values = c("TRUE" = highlight.color, "FALSE" = "grey60"), guide = FALSE) +
+        scale_size_manual(values = c("TRUE" = 2, "FALSE" = .6), guide = FALSE)  +
+        wuf_xlab + wuf_ylab
+    species_plot = ggplot(data.frame(subset(biplot_df, sample == s_idx), FamilySubset)) +
+        geom_point(aes(x = xend - x, y = yend - y, color = FamilySubset), size = species_point_size) +
+        theme(legend.position = "none") + wuf_xlab + wuf_ylab
+    if(plotList) {
+        return(list(sample_plot_highlighted = sample_plot_highlighted, species_plot = species_plot))
+    }
+    multiplot(sample_plot_highlighted, species_plot, cols = 2)
+}
+```
+
+These figures aren't included in the paper, but are included here as examples.
+
+```{r}
+make_pair_at_sample_wuf(44)
+make_pair_at_sample_wuf(124)
+make_pair_at_sample_wuf(72)
+make_pair_at_sample_wuf(86)
+make_pair_at_sample_wuf(161)
+make_pair_at_sample_wuf(19)
+make_pair_at_sample_wuf(152)
+```
+
+
+## Plotting for UniFrac
+
+We can then move to the sample embedding plots for unweighted UniFrac.
+The sample embeddings are again one of the elements in the output from `make_mds_matrices`.
+
+```{r}
+uf_sample_plot =
+    ggplot(data.frame(uf_mds_matrices$Y, sd)) +
+    geom_point(aes(x = Axis1, y = Axis2, color = type, shape = ind), size = sample_point_size) +
+        xlab(sprintf("Axis 1: %2.1f%%", uf_mds_matrices$Lambda[1] / sum(uf_mds_matrices$Lambda) * 100)) +
+        ylab(sprintf("Axis 2: %2.1f%%", uf_mds_matrices$Lambda[2] / sum(uf_mds_matrices$Lambda) * 100))
+uf_sample_plot
+```
+
+As for weighted UniFrac, we define a function that makes a pair of plots corresponding to the local biplot axes for weighted UniFrac at one sample point.
+As before, the left-hand plot shows the sample embeddings with the sample corresponding to the local biplot axes highlighted, and the right-hand plot shows the local biplot axes for the highlighted sample.
+
+```{r}
+make_pair_at_sample_uf = function(s_idx, plotList = FALSE) {
+    if(!(s_idx %in% samples_for_biplot)) {
+        stop("didn't compute axes for that point")
+    } else {
+        idx = which(samples_for_biplot == s_idx)
+    }
+    highlight.color = "#E58601" ## this is wes_palette("FantasticFox1", 5)[4]
+    uf_xlab = xlab(sprintf("Axis 1: %2.1f%%", uf_mds_matrices$Lambda[1] / sum(uf_mds_matrices$Lambda) * 100))
+    uf_ylab = ylab(sprintf("Axis 2: %2.1f%%", uf_mds_matrices$Lambda[2] / sum(uf_mds_matrices$Lambda) * 100))
+    sample_plot_highlighted =
+        ggplot(data.frame(uf_mds_matrices$Y, sample = 1:nrow(uf_mds_matrices$Y))) +
+        geom_point(aes(x = Axis1, y = Axis2, color = sample == s_idx, size = sample == s_idx)) +
+        scale_color_manual(values = c("TRUE" = highlight.color, "FALSE" = "grey60"), guide = FALSE) +
+        scale_size_manual(values = c("TRUE" = 2, "FALSE" = .6), guide = FALSE) + uf_xlab + uf_ylab
+    species_plot = ggplot(data.frame(uf_sens_all[[idx]], FamilySubset)) +
+        geom_point(aes(x = X1, y = X2, color = FamilySubset), size = species_point_size) +
+        theme(legend.position = "none") +
+        uf_xlab + uf_ylab
+    if(plotList) {
+        return(list(sample_plot_highlighted = sample_plot_highlighted, species_plot = species_plot))
+    }
+    multiplot(sample_plot_highlighted, species_plot, cols = 2)
+}
+```
+
+These plots are not in the paper, but included as some examples.
+
+```{r}
+make_pair_at_sample_uf(133)
+make_pair_at_sample_uf(154)
+make_pair_at_sample_uf(76)
+make_pair_at_sample_uf(103)
+```
+
+## Plotting for generalized PCA/generalized Euclidean distances
+
+As described in the paper, for the generalized Euclidean distances the local biplot axes are constant and can be computed using a generalized PCA.
+The first two lines are transformations of the data matrix so that it can be used for gPCA.
+The first line is transforming the data to compositions --- this isn't necessarily a transformation we would normally use, but doing it makes the results more comparable to those for weighted UniFrac, which implicitly transforms to compositions.
+The second line is just column centering the data, which we always need to do before PCA.
+
+```{r}
+Xscaled = sweep(X, 1, STATS = rowSums(X), FUN = "/")
+Xscaled = sweep(Xscaled, 2, STATS = colMeans(Xscaled), FUN = "-")
+```
+
+Once we have transformed the data matrix, we define the matrix `Q` used for the generalized Euclidean distance corresponding to DPCoA, and perform gPCA with `Xscaled` and `Q`.
+This corresponds to MDS with the generalized Euclidean distance `d(x,y)^2 = (x - y)^T Q (x - y)`
+
+`dpcoa_samples` and `dpcoa_species` are the sample embeddings and local biplot axes, respectively.
+```{r}
+Q = ape::vcv(phy_tree(abt))
+Qeig = eigen(Q, symmetric = TRUE)
+out_dpcoa = adaptiveGPCA:::gpcaEvecs(X = Xscaled, evecs = Qeig$vectors, evals = Qeig$values, k = 2)
+dpcoa_xlab = xlab(sprintf("Axis 1: %2.1f%%", out_dpcoa$lambda[1]^2 / sum(out_dpcoa$lambda^2) * 100))
+dpcoa_ylab = ylab(sprintf("Axis 2: %2.1f%%", out_dpcoa$lambda[2]^2 / sum(out_dpcoa$lambda^2) * 100))
+dpcoa_samples = ggplot(data.frame(out_dpcoa$U, sd)) +
+    geom_point(aes(x = Axis1, y = Axis2, color = type, shape = ind), size = sample_point_size) +
+    dpcoa_xlab + dpcoa_ylab
+dpcoa_species = ggplot(data.frame(out_dpcoa$QV, Family = FamilySubset)) +
+    geom_point(aes(x = Axis1, y = Axis2, color = Family), size = species_point_size) +
+    dpcoa_xlab + dpcoa_ylab + theme(legend.key.height=unit(.7,"line"))
+grid.arrange(g_legend(dpcoa_samples),
+             dpcoa_samples + theme(legend.position = "none"),
+             dpcoa_species + theme(legend.position = "none"),
+             g_legend(dpcoa_species),
+             ncol = 4, widths = c(.4, 1, 1, .8))
+```
+
+## Plotting for PCA
+
+For PCA, we do the same thing: we use the same data matrix, `pca_samples` are the sample embeddings, and `pca_species` are the local biplot axes.
+
+```{r}
+out_pca = adaptiveGPCA:::gpcaEvecs(X = Xscaled, evecs = diag(rep(1, ncol(X))), evals = rep(1, ncol(X)), k = 2)
+pca_xlab = xlab(sprintf("Axis 1: %2.1f%%", out_pca$lambda[1]^2 / sum(out_pca$lambda^2) * 100))
+pca_ylab = ylab(sprintf("Axis 2: %2.1f%%", out_pca$lambda[2]^2 / sum(out_pca$lambda^2) * 100))
+pca_samples = ggplot(data.frame(out_pca$U, sd)) +
+    geom_point(aes(x = Axis1, y = Axis2, color = type, shape = ind), size = sample_point_size) +
+    pca_xlab + pca_ylab
+pca_species = ggplot(data.frame(out_pca$QV, Family = FamilySubset)) +
+    geom_point(aes(x = Axis1, y = Axis2, color = Family), size = species_point_size) +
+    pca_xlab + pca_ylab
+grid.arrange(g_legend(pca_samples),
+             pca_samples + theme(legend.position = "none"),
+             pca_species + theme(legend.position = "none"),
+             g_legend(pca_species),
+             ncol = 4, widths = c(.4, 1, 1, .8))
+```
+
+## Plotting for agpca
+
+Finally, we have the local biplot axes for the generalized Euclidean distance corresponding to adaptive gPCA.
+
+As before, `agpca_samples` are the sample embeddings, and `agpca_species` are the local biplot axes.
+
+```{r}
+out_agpca = adaptivegpca(X = Xscaled, Q = Q, k = 2)
+agpca_xlab = xlab(sprintf("Axis 1: %2.1f%%", out_agpca$lambda[1]^2 / sum(out_agpca$lambda^2) * 100))
+agpca_ylab = ylab(sprintf("Axis 2: %2.1f%%", out_agpca$lambda[2]^2 / sum(out_agpca$lambda^2) * 100))
+agpca_samples = ggplot(data.frame(out_agpca$U, sd)) +
+    geom_point(aes(x = Axis1, y = Axis2, color = type, shape = ind), size = sample_point_size) +
+    agpca_xlab + agpca_ylab
+agpca_species = ggplot(data.frame(out_agpca$QV, Family = FamilySubset)) +
+    geom_point(aes(x = Axis1, y = Axis2, color = Family), size = species_point_size) +
+    agpca_xlab + agpca_ylab + theme(legend.key.height = unit(.7, "line"))
+grid.arrange(g_legend(agpca_samples),
+             agpca_samples + theme(legend.position = "none"),
+             agpca_species + theme(legend.position = "none"),
+             g_legend(agpca_species),
+             ncol = 4, widths = c(.4, 1.1, 1.2, .8))
+```
+
+
+## All of the sample plots
+
+Finally, we can collect all of the sample embedding plots together into one to facilitate comparison.
+
+```{r}
+pdf("all-samples.pdf", width = 6.5, height = 4)
+grid.arrange(
+    pca_samples + coord_fixed() + ggtitle("Euclidean distance") + theme(legend.position = "none"),
+    uf_sample_plot + coord_fixed() + ggtitle("UniFrac") + theme(legend.position = "none"),
+    agpca_samples + coord_fixed() + ggtitle("Adaptive gPCA") + theme(legend.position = "none"),
+    wuf_sample_plot + coord_fixed() + ggtitle("Weighted UniFrac") + theme(legend.position = "none"),
+    dpcoa_samples + coord_fixed() + ggtitle("DPCoA") + theme(legend.position = "none"),
+    g_legend(agpca_samples + scale_shape("Subject") + scale_color_discrete("Antibiotic Treatment")), ncol = 3
+)
+dev.off()
+```
+
+## Local biplot axes
+
+We can do the same thing with same of the local biplot axes.
+Each panel is a set of local biplot axes for one of the distance, and we put them all together in one plot so that we can compare them easily.
+
+```{r}
+biplot_theme = theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 6),
+                     axis.text.y = element_text(size = 6),
+                     legend.position = "none")
+biplot_legend_theme = theme(legend.key.size = unit(.1, 'cm'), legend.spacing.y = unit(0, 'cm'))
+pdf("all-biplots.pdf", width = 7, height = 5)
+grid.arrange(
+    pca_species + coord_fixed() + ggtitle("Euclidean distance") + biplot_theme,
+    make_pair_at_sample_uf(103, plotList = TRUE)[[2]] + coord_fixed() + ggtitle("UniFrac") + biplot_theme,
+    agpca_species + coord_fixed() + ggtitle("Adaptive gPCA") + biplot_theme,
+    make_pair_at_sample_wuf(161, plotList = TRUE)[[2]] + coord_fixed() + ggtitle("Weighted UniFrac") + biplot_theme,
+    dpcoa_species + coord_fixed() + ggtitle("DPCoA") + biplot_theme,
+    g_legend(dpcoa_species + biplot_legend_theme), ncol = 3, heights = c(1, 1.2)
+)
+dev.off()
+```

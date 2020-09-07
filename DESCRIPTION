@@ -1,0 +1,26 @@
+Package: localBiplots
+Title: Local biplots for multi-dimensional scaling
+Version: 0.0.1
+Authors@R: person("Julia", "Fukuyama", email = "julia.fukuyama@gmail.com", role = c("aut", "cre"))
+Description: Local biplots for MDS.
+Depends: R (>= 3.5.1)
+License: AGPL-3
+Encoding: UTF-8
+LazyData: true
+Suggests: 
+    testthat,
+    knitr,
+    Matrix,
+    ape,
+    ggtree,
+    latex2exp,
+    phyloseq,
+    reshape2,
+    rmutil,
+    viridis
+Imports:
+    shiny,
+    ggplot2
+RoxygenNote: 7.1.0
+VignetteBuilder:
+    knitr
