@@ -21,6 +21,6 @@ Suggests:
 Imports:
     shiny,
     ggplot2
-RoxygenNote: 7.1.0
+RoxygenNote: 7.2.3
 VignetteBuilder:
     knitr

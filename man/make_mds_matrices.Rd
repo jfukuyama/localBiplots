@@ -4,12 +4,14 @@
 \alias{make_mds_matrices}
 \title{Computes MDS representation and other associated values}
 \usage{
-make_mds_matrices(X, dist_fn)
+make_mds_matrices(X = NULL, dist_fn = NULL, dist_mat = NULL)
 }
 \arguments{
 \item{X}{A samples x variables data matrix}
 
 \item{dist_fn}{A function that computes the distances between the rows of Y.}
+
+\item{dist_mat}{If this argument is non-null, use it as the distance matrix instead of calling dist_fn on the rows of X.}
 }
 \value{
 A list, containing

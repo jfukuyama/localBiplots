@@ -39,7 +39,7 @@ compute_lb_samples <- function(mds_matrices, dist_fns, k, samples) {
 #' @param dist_fns The output from make_dist_fns.
 #' @param k The number of embedding dimensions for multi-dimensional scaling. Defaults to 2.
 #' @param new_points A list with new points to compute biplot axes for.
-#' 
+#'
 #' @return A data frame. Each row describes one LB axis for one
 #'     sample. Columns labeled 'Embedding' give the embedding of the
 #'     sample in MDS space, columns labeled 'Axis' give the LB axis
@@ -75,6 +75,7 @@ compute_lb_new_points <- function(mds_matrices, dist_fns, k, new_points) {
 #'
 #' @param X A samples x variables data matrix
 #' @param dist_fn A function that computes the distances between the rows of Y.
+#' @param dist_mat If this argument is non-null, use it as the distance matrix instead of calling dist_fn on the rows of X.
 #'
 #' @return A list, containing
 #' - delta: Matrix of squared distances.
@@ -83,9 +84,14 @@ compute_lb_new_points <- function(mds_matrices, dist_fns, k, new_points) {
 #' - Y: The embeddings of the samples in the MDS space.
 #' - Lambda: The eigenvalues of jdj.
 #' - X: The original data.
-make_mds_matrices <- function(X, dist_fn) {
-    n = nrow(X)
-    dist_output = dist_fn(X)
+make_mds_matrices <- function(X = NULL, dist_fn = NULL, dist_mat = NULL) {
+    if(is.null(dist_mat)) {
+        dist_output = dist_fn(X)
+        n = nrow(X)
+    } else {
+        dist_output = as.matrix(dist_mat)
+        n = nrow(dist_output)
+    }
     ## as.matrix allows us to handle the output from the 'dist'
     ## function as well as matrix-valued outputs
     ## delta is the matrix that contains the squared distances
@@ -261,7 +267,7 @@ local_biplot <- function(X, dist, dist_deriv = NULL, k = 2,
         lb_dfs[["original"]] = compute_lb_samples(
             mds_matrices, dist_fns, k = k, samples = samples
         )
-        
+
     }
     if(length(new_points) > 0) {
         lb_dfs[["new"]] = compute_lb_new_points(
@@ -284,4 +290,64 @@ correlation_biplot <- function(X, dist, plotting_axes = 1:2) {
     biplot_axes = cor(X, mds_matrices$Y)[,plotting_axes]
     colnames(biplot_axes) = sapply(plotting_axes, function(i) sprintf("Axis%i", i))
     return(biplot_axes)
+}
+
+#' Embed new points in an MDS diagram
+#'
+#' @param mds_matrices The output from make_mds_matrices.
+#' @param new_points A matrix, each row corresponding to a new sample, each column corresponding to a variable.
+#' @param dist_fn A function taking a matrix as its argument, returns distances between the rows.
+#' @param old_new_dist_mat A matrix with n_old rows and n_new columns containing distances between the old and new points. If this argument is non-null, these distances will be used instead of computing the distances using dist_fn.
+#'
+#' @return A matrix containing the embedding locations of the new points. Rows correspond to new samples, columns correspond to embedding dimensions.
+embed_new_points <- function(mds_matrices, new_points = NULL, dist_fn = NULL, old_new_dist_mat = NULL) {
+    if(is.null(old_new_dist_mat)) {
+        d2_old_new = get_distances(mds_matrices$X, new_points, dist_fn)^2
+    } else {
+        d2_old_new = old_new_dist_mat^2
+    }
+    a = -d2_old_new + mds_matrices$d2
+    fz = .5 * t(a) %*% mds_matrices$Y %*% diag(mds_matrices$Lambda[1:ncol(mds_matrices$Y)]^(-1))
+    return(fz)
+
+}
+
+
+#' Get distances between a set of old points and a set of new points
+#'
+#' @param old_points n_old x n_variables matrix with rows containing the old points.
+#' @param new_points n_new x n_variables matrix with rows containing the new point.
+#' @param dist_fn A function taking as input a matrix, returning the distances between the rows of the matrix.
+#'
+#' @return A matrix with n_old rows and n_new columns containing the
+#'     distance between each pair of old and new points.
+get_distances <- function(old_points, new_points, dist_fn) {
+    X = rbind(old_points, new_points)
+    # this is doing a lot of extra computation, but it's reasonably
+    # likely that making all the new data structures you would need to
+    # avoid that would be even worse
+    dists = as.matrix(dist_fn(X))
+    n_old = nrow(old_points)
+    n_new = nrow(new_points)
+    return(dists[1:n_old, (n_old + 1):(n_old + n_new)])
+}
+
+
+#' Add new points to an ordination object created by phyloseq
+#'
+#' @param ps_old A phyloseq object containing the original samples used for phyloseq::ordinate.
+#' @param ps_old_and_new A phyloseq object containing both the old samples (those used for phyloseq::ordinate) and the new samples to be added to the embedding diagram.
+#' @param distance The same argument that was passed to phyloseq::ordinate
+add_to_phyloseq_ordination <- function(ps_old, ps_old_and_new, distance) {
+    new_sample_names = setdiff(sample_names(ps_old_and_new), sample_names(ps_old))
+    new_sample_indices = which(sample_names(ps_old_and_new) %in% new_sample_names)
+    old_sample_indices = which(!(sample_names(ps_old_and_new) %in% new_sample_names))
+    old_and_new_distance = as.matrix(distance(ps_old_and_new, method = distance))[old_sample_indices, new_sample_indices]
+    old_distance = distance(ps_old, method = distance)
+    mds_matrices = make_mds_matrices(dist_mat = old_distance)
+    embeddings = embed_new_points(mds_matrices, old_new_dist_mat = old_and_new_distance)
+    embeddings = data.frame(embeddings)
+    names(embeddings) = paste("Axis", 1:ncol(embeddings), sep = "")
+    embeddings = data.frame(embeddings, sample_data(ps_old_and_new)[new_sample_indices,])
+    return(embeddings)
 }
