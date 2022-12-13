@@ -300,6 +300,7 @@ correlation_biplot <- function(X, dist, plotting_axes = 1:2) {
 #' @param old_new_dist_mat A matrix with n_old rows and n_new columns containing distances between the old and new points. If this argument is non-null, these distances will be used instead of computing the distances using dist_fn.
 #'
 #' @return A matrix containing the embedding locations of the new points. Rows correspond to new samples, columns correspond to embedding dimensions.
+#' @export
 embed_new_points <- function(mds_matrices, new_points = NULL, dist_fn = NULL, old_new_dist_mat = NULL) {
     if(is.null(old_new_dist_mat)) {
         d2_old_new = get_distances(mds_matrices$X, new_points, dist_fn)^2
@@ -338,6 +339,7 @@ get_distances <- function(old_points, new_points, dist_fn) {
 #' @param ps_old A phyloseq object containing the original samples used for phyloseq::ordinate.
 #' @param ps_old_and_new A phyloseq object containing both the old samples (those used for phyloseq::ordinate) and the new samples to be added to the embedding diagram.
 #' @param distance The same argument that was passed to phyloseq::ordinate
+#' @export
 add_to_phyloseq_ordination <- function(ps_old, ps_old_and_new, distance) {
     new_sample_names = setdiff(sample_names(ps_old_and_new), sample_names(ps_old))
     new_sample_indices = which(sample_names(ps_old_and_new) %in% new_sample_names)
